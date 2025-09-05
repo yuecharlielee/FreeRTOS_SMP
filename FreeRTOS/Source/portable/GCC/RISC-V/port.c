@@ -50,11 +50,12 @@
 // size_t volatile pxCriticalNesting[ configNUMBER_OF_CORES ] = { 0xaaaaaaaa, 0xaaaaaaaa, 0xaaaaaaaa, 0xaaaaaaaa };
 
 
-
+UBaseType_t const ullMachineSoftwareInterruptRegisterBase = configMSIP_BASE_ADDRESS;
 volatile BaseType_t xYieldRequest[configNUMBER_OF_CORES] = {pdFALSE};
 
 extern void freertos_risc_v_trap_handler(void);
 
+/* The stack used by interrupt service routines. */
 /* The stack used by interrupt service routines. */
 #if ( configNUMBER_OF_CORES > 1 )
     __attribute__((aligned(16))) StackType_t xISRStack[ configNUMBER_OF_CORES ][ configISR_STACK_SIZE_WORDS ];
@@ -80,9 +81,8 @@ void vPortSetupTimerInterrupt(void) __attribute__((weak));
 
 /* Used to program the machine timer compare register. */
 volatile uint32_t ullPortSchedularRunning = false;
-volatile uint64_t ullNextTime[configNUMBER_OF_CORES] = {0};
-
-
+volatile uint64_t ullNextTime = 0ULL;
+const uint64_t *pullNextTime = &ullNextTime;
 const size_t uxTimerIncrementsForOneTick = (size_t)((configCPU_CLOCK_HZ) / (configTICK_RATE_HZ));
 UBaseType_t const ullMachineTimerCompareRegisterBase = configMTIMECMP_BASE_ADDRESS;
 volatile uint64_t *pullMachineTimerCompareRegister = NULL;
@@ -108,19 +108,18 @@ void vPortSetupTimerInterrupt(void)
         ulCurrentTimeLow = *pulTimeLow;
     } while (ulCurrentTimeHigh != *pulTimeHigh);
 
+    ullNextTime = (uint64_t)ulCurrentTimeHigh;
+    ullNextTime <<= 32ULL;
+    ullNextTime |= (uint64_t)ulCurrentTimeLow;
+    ullNextTime += (uint64_t)uxTimerIncrementsForOneTick;
     volatile uint32_t ulHartId;
     __asm volatile("csrr %0, mhartid" : "=r"(ulHartId));
-    ullNextTime[ulHartId] = (uint64_t)ulCurrentTimeHigh;
-    ullNextTime[ulHartId] <<= 32ULL;
-    ullNextTime[ulHartId] |= (uint64_t)ulCurrentTimeLow;
-    ullNextTime[ulHartId] += (uint64_t)uxTimerIncrementsForOneTick;
-    
     volatile uint64_t * registers_base_address;
     registers_base_address = pullMachineTimerCompareRegister + ulHartId;
-    *registers_base_address = ullNextTime[ulHartId];
+    *registers_base_address = ullNextTime;
 
     /* Prepare the time to use after the next tick interrupt. */
-    ullNextTime[ulHartId] += (uint64_t)uxTimerIncrementsForOneTick;
+    ullNextTime += (uint64_t)uxTimerIncrementsForOneTick;
 }
 
 #endif /* ( configMTIME_BASE_ADDRESS != 0 ) && ( configMTIME_BASE_ADDRESS != 0 ) */
@@ -140,10 +139,9 @@ BaseType_t xPortStartScheduler(void)
 
 
     ullPortSchedularRunning = true;
-
     #if ((configMTIME_BASE_ADDRESS != 0) && (configMTIMECMP_BASE_ADDRESS != 0))
     {
-        __asm volatile("csrs mie, %0" ::"r"(0x88U));  
+        __asm volatile("csrs mie, %0" ::"r"(0x88U));
     }
 #endif
 
@@ -157,23 +155,19 @@ BaseType_t xPortStartSchedulerOncore(void){
 
     uintptr_t trap_addr = ((uintptr_t)freertos_risc_v_trap_handler);
     __asm__ volatile("csrw mtvec, %0" ::"r"(trap_addr));
-
-    vPortSetupTimerInterrupt();
-
-
+    // vPortSetupTimerInterrupt();
 
     while (!ullPortSchedularRunning)
     {
         __asm__ volatile("fence");
     }
 
-
     #if ((configMTIME_BASE_ADDRESS != 0) && (configMTIMECMP_BASE_ADDRESS != 0))
     {
-        __asm volatile("csrs mie, %0" ::"r"(0x88U));  
-    }
-#endif
 
+        __asm volatile("csrs mie, %0" ::"r"(0x8U));  
+    }
+    #endif
     xPortStartFirstTask();
 
     return pdFAIL;
@@ -205,14 +199,16 @@ void vPortYieldOtherCore(UBaseType_t xCoreID)
     if (xCoreID < (UBaseType_t)configNUMBER_OF_CORES)
     {
         xYieldRequest[xCoreID] = pdTRUE;
+        volatile uint32_t *pulMSIPRegister = (volatile uint32_t *)(configMSIP_BASE_ADDRESS + (xCoreID * 4));
+        *pulMSIPRegister = 1UL;
     }
 }
 
 volatile uint32_t xIsrLock = 0;
 volatile uint32_t xTaskLock = 0;
 
-uint8_t ucOwnedByCore[configNUMBER_OF_CORES][2];
-uint8_t ucRecursionCount[configNUMBER_OF_CORES][2];
+uint8_t ucOwnedByCore[configNUMBER_OF_CORES][2] = {0};
+uint8_t ucRecursionCount[configNUMBER_OF_CORES][2] = {0};
 
 bool SpinTryLock(volatile uint32_t *lock)
 {
@@ -286,7 +282,7 @@ void vPortRecursiveLock(BaseType_t xCoreID,
 
 BaseType_t xPortTickInterruptHandler(void)
 {
-    BaseType_t xSwitchRequired = pdFALSE;
+    BaseType_t xSwitchRequired;
     UBaseType_t uxSavedInterruptStatus;
 
     if (ullPortSchedularRunning == true)

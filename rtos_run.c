@@ -1,10 +1,10 @@
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
 
 #define N                       64 
 #define CORE_NUM                configNUMBER_OF_CORES
@@ -16,24 +16,27 @@
 
 unsigned int *A, *B, *C, *ans;
 
-volatile uint32_t g_ulStartRunFlag = 0;
+// Semaphore for print synchronization only
+SemaphoreHandle_t xPrintSemaphore = NULL;
 volatile uint32_t g_ulWorkersDoneMask = 0;
 volatile uint32_t g_ulRunCounter = 0;
+volatile uint32_t g_ulStartRunFlag = 0;
 
 extern void freertos_risc_v_trap_handler(void);
 extern void xPortStartSchedulerOncore(void);
 
 static inline void lock_print() {
-    uint32_t ulHartId = rtos_core_id_get() + 1;
-    uint32_t ulPrevVal;
-    do {
-        __asm__ volatile("amoswap.w.aqrl %0, %2, %1" : "=r"(ulPrevVal), "+A"(*PRINT_LOCK_ADDR) : "r"(ulHartId) : "memory");
-    } while (ulPrevVal != 0);
+    if (xPrintSemaphore != NULL) {
+        xSemaphoreTake(xPrintSemaphore, portMAX_DELAY);
+    }
 }
 
 static inline void unlock_print() {
-    __asm__ volatile("amoswap.w.rl zero, zero, %0" : : "A"(*PRINT_LOCK_ADDR) : "memory");
+    if (xPrintSemaphore != NULL) {
+        xSemaphoreGive(xPrintSemaphore);
+    }
 }
+
 
 static void atomic_or(volatile uint32_t *addr, int val) {
     __asm__ volatile("amoor.w.aqrl zero, %1, %0" : "+A"(*addr) : "r"(val) : "memory");
@@ -131,12 +134,11 @@ int main(void) {
         while(1);
     }
     if (core_id == COORDINATOR_CORE) {
-        *(volatile uint32_t *)PRINT_LOCK_ADDR = 0u;
         *(volatile uint32_t *)MALLOC_LOCK_ADDR = 0u;
 
-        lock_print();
+        xPrintSemaphore = xSemaphoreCreateMutex();
+
         printf("Core 0: Initializing...\n");
-        unlock_print();
 
         A = (unsigned int *)pvPortMalloc(N * N * sizeof(unsigned int));
         B = (unsigned int *)pvPortMalloc(N * N * sizeof(unsigned int));
@@ -155,9 +157,8 @@ int main(void) {
             }
         }
         
-        lock_print();
+
         printf("Core 0: Creating tasks for a single run...\n");
-        unlock_print();
 
         xTaskCreateAffinitySet(vCoordinatorTask, NULL, TASK_STACK_SIZE, NULL, TASK_PRIORITY, (1 << COORDINATOR_CORE), NULL);
         for (int i = 1; i < CORE_NUM; i++) {
