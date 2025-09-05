@@ -72,6 +72,11 @@ VPATH += $(FREERTOS_SOURCE_DIR)/portable/GCC/$(ARCH)
 APP_SRC_DIR = .
 APP_SRC = $(APP_SRC_DIR)/$(PROJ).c
 
+# Suspend test application
+SUSPEND_TEST_PROJ = rtos_run_suspend_test
+SUSPEND_TEST_ELF = ./$(SUSPEND_TEST_PROJ).elf
+SUSPEND_TEST_SRC = $(APP_SRC_DIR)/$(SUSPEND_TEST_PROJ).c
+
 LIB_SRC = \
 	$(CRT0_FILE) \
 	$(LIBC)/stdio.c \

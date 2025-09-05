@@ -15,8 +15,8 @@
 #define configMTIME_BASE_ADDRESS         ( CLINT_CTRL_ADDR + 0xBFF8UL )
 
 /* Scheduler and SMP related */
-#define configUSE_PREEMPTION             1  
-#define configUSE_TIME_SLICING           1
+#define configUSE_PREEMPTION             0 
+#define configUSE_TIME_SLICING           0
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION 0
 #define configUSE_IDLE_HOOK              0
 #define configUSE_PASSIVE_IDLE_HOOK      0

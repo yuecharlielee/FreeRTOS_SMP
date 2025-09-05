@@ -127,7 +127,9 @@ void vCoordinatorTask() {
 
 int main(void) {
     int core_id = rtos_core_id_get();
-
+    if(core_id >= configNUMBER_OF_CORES) {
+        while(1);
+    }
     if (core_id == COORDINATOR_CORE) {
         *(volatile uint32_t *)PRINT_LOCK_ADDR = 0u;
         *(volatile uint32_t *)MALLOC_LOCK_ADDR = 0u;

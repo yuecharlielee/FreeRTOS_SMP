@@ -40,7 +40,7 @@
 .extern xTaskReturnAddress
 .extern xPortTickInterruptHandler
 .extern ullMachineTimerCompareRegisterBase
-.extern ullMachineSoftwareInterruptRegisterBase
+.extern xYieldRequest
 
 
 .weak freertos_risc_v_application_exception_handler
@@ -48,8 +48,11 @@
 /*-----------------------------------------------------------*/
 .macro portUPDATE_MTIMER_COMPARE_REGISTER
     load_x a0, pullMachineTimerCompareRegister  /* Load address of compare register into a0. */
-    load_x a1, pullNextTime                     /* Load the address of ullNextTime into a1. */
-
+    la a1, ullNextTime                     /* Load the address of ullNextTime into a1. */
+    csrr  t0, mhartid
+    slli  t0, t0, 3
+    add   a0, a0, t0 
+    add   a1, a1, t0
     #if( __riscv_xlen == 32 )
 
         /* Update the 64-bit mtimer compare match value in two 32-bit writes. */
@@ -228,15 +231,45 @@ freertos_risc_v_trap_handler:
 
 asynchronous_interrupt:
     store_x a1, 0( sp )
-    load_x sp, xISRStackTop           
-
+    # load_x sp, xISRStackTop           
+# #if ( configNUMBER_OF_CORES > 1 )
+#     csrr   t0, mhartid                   
+#     load_x t1, xSingleISRStackSizeInBytes 
+#     mul    t2, t0, t1                     
+#     la     sp, xISRStack               
+#     add    sp, sp, t2                     
+#     add    sp, sp, t1                    
+# #else
+#     load_x sp, xISRStackTop 
+# #endif
+    csrr   t0, mhartid                   
+    load_x t1, xSingleISRStackSizeInBytes 
+    mul    t2, t0, t1                     
+    la     sp, xISRStack               
+    add    sp, sp, t2                     
+    add    sp, sp, t1   
     j handle_interrupt
 
 synchronous_exception:
     addi a1, a1, 4
     store_x a1, 0( sp )
-    load_x sp, xISRStackTop
-
+#     # load_x sp, xISRStackTop
+# #if ( configNUMBER_OF_CORES > 1 )
+#     csrr   t0, mhartid                   
+#     load_x t1, xSingleISRStackSizeInBytes 
+#     mul    t2, t0, t1                     
+#     la     sp, xISRStack               
+#     add    sp, sp, t2                     
+#     add    sp, sp, t1                    
+# #else
+#     load_x sp, xISRStackTop  
+# #endif
+csrr   t0, mhartid                   
+    load_x t1, xSingleISRStackSizeInBytes 
+    mul    t2, t0, t1                     
+    la     sp, xISRStack               
+    add    sp, sp, t2                     
+    add    sp, sp, t1   
     j handle_exception
 
 handle_interrupt:
@@ -246,29 +279,40 @@ handle_interrupt:
         addi t0, x0, 1
         slli t0, t0, __riscv_xlen - 1   /* LSB is already set, shift into MSB.  Shift 31 on 32-bit or 63 on 64-bit cores. */
         addi t1, t0, 7                  /* 0x8000[]0007 == machine timer interrupt. */
-        bne a0, t1, software_interrupt_handler
+        bne a0, t1, application_interrupt_handler
 
         portUPDATE_MTIMER_COMPARE_REGISTER
-        call xPortTickInterruptHandler      /* Core 0 executes the tick handler. */
-        beqz a0, processed_source           
-        csrr a0, mhartid
-        call vTaskSwitchContext
-        j processed_source
-#endif
+        csrr t0, mhartid
+        bnez t0, check_sw_yield
+        call xPortTickInterruptHandler
+        mv t0, a0
+        j 1f
+#endif 
 
-software_interrupt_handler:
+check_sw_yield:
     csrr a1, mhartid
-    slli a2, a1, 2
-    la   a3, ullMachineSoftwareInterruptRegisterBase
+    slli a2, a1, 2              
+    la   a3, xYieldRequest
     add  a3, a3, a2
-    sw   x0, 0(a3)
-    j context_switch_handler
+    lw   a4, 0(a3)
+    beqz a4, 1f                  
+    
+    sw   zero, 0(a3)           
+    li   t0, 1                 
+
+1:
+    beqz t0, processed_source     
+    j context_switch_handler     
+
+application_interrupt_handler:
+    call freertos_risc_v_application_interrupt_handler
+    j processed_source
 
 handle_exception:
     /* a0 contains mcause. */
-    li t0, 8                            /* 8 == Environment call from U-mode */
+    li t0, 8                                    /* 8 == Environment call from U-mode */
     beq a0, t0, context_switch_handler
-    li t0, 11                           /* 11 == Environment call from M-mode */
+    li t0, 11                                   /* 11 == Environment call from M-mode */
     bne a0, t0, application_exception_handler   /* Not an M environment call, so some other exception. */
 
 context_switch_handler:

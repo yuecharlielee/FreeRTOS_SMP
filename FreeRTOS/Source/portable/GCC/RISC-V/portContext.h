@@ -119,7 +119,12 @@
 /*-----------------------------------------------------------*/
 .extern uxYieldRequested
 .extern pxCurrentTCBs
-.extern xISRStackTop
+#if ( configNUMBER_OF_CORES > 1 )
+    .extern xISRStack
+    .extern xSingleISRStackSizeInBytes
+#else
+    .extern xISRStackTop
+#endif
 .extern xCriticalNesting
 .extern pxCriticalNesting
 .extern xYieldPendings
@@ -391,7 +396,16 @@ csrr a0, mcause
 csrr a1, mepc
 addi a1, a1, 4          /* Synchronous so update exception return address to the instruction after the instruction that generated the exception. */
 store_x a1, 0 ( sp )    /* Save updated exception return address. */
-load_x sp, xISRStackTop /* Switch to ISR stack. */
+#if ( configNUMBER_OF_CORES > 1 )
+    csrr   t0, mhartid                   
+    load_x t1, xSingleISRStackSizeInBytes 
+    mul    t2, t0, t1                     
+    la     sp, xISRStack               
+    add    sp, sp, t2                     
+    add    sp, sp, t1                    
+#else
+    load_x sp, xISRStackTop 
+#endif
    .endm
 /*-----------------------------------------------------------*/
 
@@ -400,7 +414,16 @@ portcontextSAVE_CONTEXT_INTERNAL
 csrr a0, mcause
 csrr a1, mepc
 store_x a1, 0 ( sp )    /* Asynchronous interrupt so save unmodified exception return address. */
-load_x sp, xISRStackTop /* Switch to ISR stack. */
+#if ( configNUMBER_OF_CORES > 1 )
+    csrr   t0, mhartid                   
+    load_x t1, xSingleISRStackSizeInBytes 
+    mul    t2, t0, t1                     
+    la     sp, xISRStack               
+    add    sp, sp, t2                     
+    add    sp, sp, t1                    
+#else
+    load_x sp, xISRStackTop 
+#endif
    .endm
 /*-----------------------------------------------------------*/
 
